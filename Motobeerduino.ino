@@ -9,7 +9,7 @@ use of my SevSeg library.
 #include <LiquidCrystal_I2C.h>
 
 // Constantes das Portas
-const byte SensorPin = 13; 
+const byte SENSORPIN = 13; 
 const byte BUZZER = 3; 
 const byte rele = 5; 
 const byte buttonUp = 12;
@@ -23,21 +23,28 @@ const byte CONTROLE_GELADEIRA = 1;
 const byte CONTROLE_BRASSAGEM = 2;
 const byte CONTROLE_POTENCIA = 3;
 const byte DESCANSO_MOTOR = 5000;
+const byte INTERVALO_TEMPERATURA = 1;
 
 //Variaveis de configuração
-short setTemp =85;
-byte state;
+short setTemp =45;
+byte rampaAtual = 0;
+byte nRampas = 3;
+byte tempos[10] = {20,60,10};
+short temperaturas[10] = {62,70,78};
 unsigned long clock = 0;
 
+
 //Variaveis de controle de execução
+byte state = CONTROLE_RESISTENCIA;
 boolean printSetTemp = true;
 boolean printMenu = true;
+boolean printTime = true;
+
 unsigned long timer;
-unsigned long wait_time;
 byte buttonState = 0;  
 byte pressCount = 0;  
 LiquidCrystal_I2C lcd(0x27,16,2);
-OneWire ds(SensorPin); 
+OneWire ds(SENSORPIN); 
 
 void setup() {  
 	timer=millis();
@@ -55,29 +62,46 @@ void setup() {
 
 void loop() 
 {
-	if (state == CONTROLE_POTENCIA)
+	if ( millis() - timer > 1000)
 	{
-			
+		printTime = true;
+		timer=millis();  
 	}
-	else
+	switch (state)
 	{
-		printMainScreen() ;
-		float temp = getTemp();
-		unsigned long tempoFalta = getTempo();
-		if ( millis() - timer > 1000)
-		{    
-			printRelogio(tempoFalta);			
-			printTemperatura(temp);
-			timer=millis();  
+		case CONTROLE_RESISTENCIA:
+		case CONTROLE_GELADEIRA:
+		case CONTROLE_BRASSAGEM:
+		{
+			controleTemperatura();
+			break;
 		}
-		controlaResistencia(temp,tempoFalta);		
+		case CONTROLE_POTENCIA:
+		{
+			
+		}
 	}
+	
 	leBotoes();
+	printTime = false;
+}
+
+void controleTemperatura()
+{
+	printMainScreen() ;
+	float temp = getTemp();
+	unsigned long tempoFalta = getTempo();
+	if ( printTime)
+	{    
+		printRelogio(tempoFalta);			
+		printTemperatura(temp);
+	}
+	controlaResistencia(temp,tempoFalta);
 }
 
 unsigned long getTempo()
 {
-	swich (state)
+	switch (state)
 	{
 		case CONTROLE_RESISTENCIA:
 		{
@@ -89,7 +113,7 @@ unsigned long getTempo()
 		}
 		case CONTROLE_BRASSAGEM:
 		{
-			return wait_time-millis()+clock;
+			return tempos[rampaAtual]-millis()+clock;
 		}
 	}
 }
@@ -119,7 +143,7 @@ void printMainScreen()
 void controlaResistencia(float temp,unsigned long tempoFalta)
 {
 	//Testa a temperatura e liga ou desliga a resistencia
-	swich (state)
+	switch (state)
 	{
 		case CONTROLE_RESISTENCIA:
 		{
@@ -145,7 +169,7 @@ void controlaResistencia(float temp,unsigned long tempoFalta)
 				digitalWrite(rele, HIGH);
 				clock = 0;
 			}
-			else if (temp < setTemp-1 )
+			else if (temp < setTemp-INTERVALO_TEMPERATURA )
 			{ 
 				if ( clock == 0 )
 				{
@@ -157,7 +181,33 @@ void controlaResistencia(float temp,unsigned long tempoFalta)
 		}
 		case CONTROLE_BRASSAGEM:
 		{
-			tempoFalta = wait_time-millis()+clock;
+			if ( clock > 0 )
+			{
+				if (temp < setTemp )
+				{
+					digitalWrite(rele, HIGH);
+				}
+				else
+				{ 
+					digitalWrite(rele, LOW); 
+				}
+				if (tempoFalta < 0)
+				{
+					if (rampaAtual < nRampas-1 )
+					{
+						rampaAtual++;
+						setTemp = temperaturas[rampaAtual];	
+						toneAcerto();					
+					}
+					else
+					{
+						if ( printTime)
+						{
+							toneAcerto();
+						}			
+					}
+				}
+			}
 			break;
 		}
 	}
@@ -252,54 +302,60 @@ void leBotoes()
 		}
 	}
 	buttonState = digitalRead(buttonReset);
-	if (buttonState == LOW) {
-	if ( clock == 0 )
+	if (buttonState == LOW) 
 	{
-	clock = millis();
-	toneAcerto();
+		if ( clock == 0 )
+		{
+			clock = millis();
+			toneAcerto();
+		}
+		else
+			clock = 0;
+			delay(200);
+		} 
 	}
-	else
-	clock = 0;
-	delay(200);
-	} 
 }
 
-float getTemp(){
-
-byte data[12];
-byte addr[8];
-if ( !ds.search(addr)) {
-ds.reset_search();
-return -1000;
-}
-if ( OneWire::crc8( addr, 7) != addr[7]) {
-return -1000;
-}
-if ( addr[0] != 0x10 && addr[0] != 0x28) {
-return -1000;
-}
-ds.reset();
-ds.select(addr);
-ds.write(0x44,1); 
-byte present = ds.reset();
-ds.select(addr); 
-ds.write(0xBE);     
-for (int i = 0; i < 9; i++) { 
-data[i] = ds.read();
-}
-ds.reset_search();
-byte MSB = data[1];
-byte LSB = data[0];
-float TRead = ((MSB << 8) | LSB); 
-float Temperature = TRead / 16;    
-return Temperature;
+float getTemp()
+{
+	byte data[12];
+	byte addr[8];
+	if ( !ds.search(addr)) 
+	{
+		ds.reset_search();
+		return -1000;
+	}
+	if ( OneWire::crc8( addr, 7) != addr[7]) 	
+	{
+		return -1000;
+	}
+	if ( addr[0] != 0x10 && addr[0] != 0x28) 
+	{
+		return -1000;
+	}
+	ds.reset();
+	ds.select(addr);
+	ds.write(0x44,1); 
+	byte present = ds.reset();
+	ds.select(addr); 
+	ds.write(0xBE);     
+	for (int i = 0; i < 9; i++) 
+	{ 
+		data[i] = ds.read();
+	}
+	ds.reset_search();
+	byte MSB = data[1];
+	byte LSB = data[0];
+	float TRead = ((MSB << 8) | LSB); 
+	float Temperature = TRead / 16;    
+	return Temperature;
 }
 
 void toneAcerto()
 {
-tone(BUZZER, 1000, 300);
-delay(300);
-tone(BUZZER, 1000, 300);
+	tone(BUZZER, 1000, 300);
+	delay(300);
+	tone(BUZZER, 1000, 300);
 }
 
 
